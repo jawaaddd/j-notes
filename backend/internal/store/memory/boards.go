@@ -81,7 +81,7 @@ func (st *state) insertBoard(in domain.BoardCreate, now time.Time) (board, error
 		st.lists[id] = list{id: id, boardID: b.id, name: def.name, kind: def.kind, position: i}
 	}
 	id := st.nextID("tags")
-	st.tags[id] = tag{id: id, boardID: b.id, name: "Urgent", color: "pink", systemKey: ptr(domain.UrgentKey)}
+	st.tags[id] = tag{id: id, boardID: b.id, name: "Urgent", color: domain.UrgentColor, systemKey: ptr(domain.UrgentKey)}
 	return b, nil
 }
 
@@ -148,6 +148,9 @@ func (s *Store) DeleteBoard(boardID int64, in domain.BoardDelete) error {
 	return s.tx(func(st *state, now time.Time) error {
 		if _, err := st.board(boardID); err != nil {
 			return err
+		}
+		if len(st.boards) == 1 {
+			return domain.ErrLastBoard()
 		}
 		cards := st.boardCards(boardID)
 		if len(cards) > 0 {

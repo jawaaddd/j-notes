@@ -9,13 +9,15 @@ import (
 type BlockType string
 
 const (
-	BlockText    BlockType = "text"
-	BlockSubtask BlockType = "subtask"
-	BlockLink    BlockType = "link"
+	BlockText BlockType = "text"
+	BlockTodo BlockType = "todo"
+	BlockLink BlockType = "link"
 )
 
 // NoteBlock is one block of a card's notes. Which fields apply depends on Type:
-// text {id, type, text}; subtask {id, type, text, done}; link {id, type, title, url}.
+// text {id, type, text}; todo {id, type, text, done, title?}; link {id, type, title, url}.
+// A todo's title names the todo list it starts: each unbroken run of todos is
+// one list, named by its first todo's title ("Todos" when empty).
 type NoteBlock struct {
 	ID    string
 	Type  BlockType
@@ -27,13 +29,14 @@ type NoteBlock struct {
 
 func (b NoteBlock) MarshalJSON() ([]byte, error) {
 	switch b.Type {
-	case BlockSubtask:
+	case BlockTodo:
 		return json.Marshal(struct {
-			ID   string    `json:"id"`
-			Type BlockType `json:"type"`
-			Text string    `json:"text"`
-			Done bool      `json:"done"`
-		}{b.ID, b.Type, b.Text, b.Done})
+			ID    string    `json:"id"`
+			Type  BlockType `json:"type"`
+			Text  string    `json:"text"`
+			Done  bool      `json:"done"`
+			Title string    `json:"title,omitempty"`
+		}{b.ID, b.Type, b.Text, b.Done, b.Title})
 	case BlockLink:
 		return json.Marshal(struct {
 			ID    string    `json:"id"`
@@ -94,13 +97,13 @@ func ValidateBlocks(blocks []NoteBlock) error {
 		}
 		seen[b.ID] = true
 		switch b.Type {
-		case BlockText, BlockSubtask:
+		case BlockText, BlockTodo:
 		case BlockLink:
 			if strings.TrimSpace(b.URL) == "" {
 				return ErrValidation(field+".url", "link blocks need a url")
 			}
 		default:
-			return ErrValidation(field+".type", "type must be text, subtask, or link")
+			return ErrValidation(field+".type", "type must be text, todo, or link")
 		}
 	}
 	return nil

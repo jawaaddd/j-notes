@@ -14,6 +14,9 @@ const (
 // Colors is the fixed tag palette.
 var Colors = map[string]bool{"pink": true, "blue": true, "violet": true, "cyan": true, "orange": true, "yellow": true}
 
+// UrgentColor is reserved: the Urgent tag always has it and no other tag can.
+const UrgentColor = "yellow"
+
 const UrgentKey = "urgent"
 
 type Board struct {
@@ -58,6 +61,7 @@ type CardSummary struct {
 	ID           int64      `json:"id"`
 	BoardID      int64      `json:"boardId"`
 	ListID       int64      `json:"listId"`
+	Position     int        `json:"position"` // order within the list, for Custom sort
 	Title        string     `json:"title"`
 	DueAt        *time.Time `json:"dueAt"`
 	DueAllDay    bool       `json:"dueAllDay"`

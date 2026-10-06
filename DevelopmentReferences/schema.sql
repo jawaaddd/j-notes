@@ -92,11 +92,12 @@ CREATE TABLE cards (
   id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   board_id        BIGINT UNSIGNED NOT NULL,
   list_id         BIGINT UNSIGNED NOT NULL,            -- which column the card is in
+  position        INT NOT NULL DEFAULT 0,              -- order within the list (Custom sort)
   title           VARCHAR(255) NOT NULL,
   due_at          DATETIME NULL,                       -- UTC
   due_all_day     BOOLEAN NOT NULL DEFAULT FALSE,      -- "the 14th" vs "11:59 PM"
   special_tag_id  BIGINT UNSIGNED NULL,                -- at most one per card
-  notes           JSON NULL,                           -- ordered blocks: text | subtask | link
+  notes           JSON NULL,                           -- ordered blocks: text | todo | link
   source_id       BIGINT UNSIGNED NOT NULL,
   external_id     VARCHAR(255) NULL,                   -- the source's own id for this item
   source_url      VARCHAR(2048) NULL,                  -- "Open on Autolab ↗"
@@ -108,6 +109,7 @@ CREATE TABLE cards (
   UNIQUE KEY uq_card_external (source_id, external_id), -- makes ingest idempotent
   UNIQUE KEY uq_card_board    (id, board_id),           -- target for composite FKs
   KEY ix_board_list (board_id, list_id),
+  KEY ix_list_position (list_id, position),
   KEY ix_board_due   (board_id, due_at),
   FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE,
   FOREIGN KEY (source_id) REFERENCES sources(id),

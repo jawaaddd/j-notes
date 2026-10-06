@@ -68,6 +68,7 @@ type CardCreate struct {
 type CardPatch struct {
 	Title        Opt[string]    `json:"title"`
 	ListID       Opt[int64]     `json:"listId"`
+	Position     Opt[int]       `json:"position"`
 	DueAt        Opt[time.Time] `json:"dueAt"`
 	DueAllDay    Opt[bool]      `json:"dueAllDay"`
 	SpecialTagID Opt[int64]     `json:"specialTagId"`
@@ -78,9 +79,10 @@ type CardPatch struct {
 type CardSort string
 
 const (
-	SortDue     CardSort = "due"
-	SortCreated CardSort = "created"
-	SortTitle   CardSort = "title"
+	SortPosition CardSort = "position" // hand-arranged order (Custom)
+	SortDue      CardSort = "due"
+	SortCreated  CardSort = "created"
+	SortTitle    CardSort = "title"
 )
 
 type CardQuery struct {

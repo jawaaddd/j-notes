@@ -16,9 +16,13 @@ func (st *state) checkTagName(boardID, exceptID int64, name string) error {
 	return nil
 }
 
+// checkColor allows the palette minus yellow, which is the Urgent tag's.
 func checkColor(c string) error {
+	if c == domain.UrgentColor {
+		return domain.ErrValidation("color", "yellow is reserved for the Urgent tag")
+	}
 	if !domain.Colors[c] {
-		return domain.ErrValidation("color", "color must be one of pink, blue, violet, cyan, orange, yellow")
+		return domain.ErrValidation("color", "color must be one of pink, blue, violet, cyan, orange")
 	}
 	return nil
 }
@@ -105,7 +109,10 @@ func (s *Store) UpdateTag(tagID int64, in domain.TagPatch) (domain.Tag, error) {
 			}
 			t.name = name
 		}
-		if in.Color.Set {
+		if in.Color.Set && t.systemKey != nil && deref(in.Color.Value) != t.color {
+			return domain.ErrSystemTag("the Urgent tag's color can't be changed")
+		}
+		if in.Color.Set && t.systemKey == nil {
 			if err := checkColor(deref(in.Color.Value)); err != nil {
 				return err
 			}

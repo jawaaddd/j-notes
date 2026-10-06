@@ -164,6 +164,24 @@ func (s *Store) ReorderLists(boardID int64, ids []int64) ([]domain.List, error) 
 	return out, err
 }
 
+func (s *Store) ArchiveList(listID int64) (int, error) {
+	n := 0
+	err := s.tx(func(st *state, now time.Time) error {
+		if _, err := st.list(listID); err != nil {
+			return err
+		}
+		for id, c := range st.cards {
+			if c.listID == listID && c.archivedAt == nil {
+				c.archivedAt, c.updatedAt = &now, now
+				st.cards[id] = c
+				n++
+			}
+		}
+		return nil
+	})
+	return n, err
+}
+
 func (s *Store) DeleteList(listID int64, in domain.ListDelete) error {
 	return s.tx(func(st *state, now time.Time) error {
 		l, err := st.list(listID)
@@ -190,10 +208,9 @@ func (s *Store) DeleteList(listID int64, in domain.ListDelete) error {
 			if err != nil {
 				return err
 			}
-			for _, c := range inList {
-				placeCard(&c, target, now)
+			for _, c := range st.listOrder(l.id) { // keep their order, after the target's cards
 				c.updatedAt = now
-				st.cards[c.id] = c
+				st.moveCard(c, target, nil, now)
 			}
 		}
 		delete(st.lists, l.id)

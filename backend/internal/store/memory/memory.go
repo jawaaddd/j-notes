@@ -1,12 +1,14 @@
-// Package memory is the mock-phase store: everything lives in process memory
-// and is lost on restart.
+// Package memory is the store: the working set lives in process memory. A
+// store from New (the mock) loses everything on restart; one from Open writes
+// every change through to a SQLite file (see sqlite.go).
 //
 // Every write runs through tx, which applies the change to a copy of the state
-// and swaps it in only if the change succeeds. That gives each method the same
-// all-or-nothing behavior a MySQL transaction will.
+// and swaps it in only if the change (and saving it) succeeds, so each method
+// is all-or-nothing.
 package memory
 
 import (
+	"database/sql"
 	"maps"
 	"slices"
 	"sort"
@@ -27,6 +29,7 @@ type Store struct {
 	// loc is the user's time zone, used for all-day dates ("due thursday"
 	// means 23:59 Thursday here) and same-day duplicate checks.
 	loc *time.Location
+	db  *sql.DB // nil for the in-memory mock
 }
 
 // New returns an empty store. now may be nil to use the wall clock; loc may be
@@ -49,6 +52,11 @@ func (s *Store) tx(fn func(st *state, now time.Time) error) error {
 	next := s.st.clone()
 	if err := fn(next, s.clock()); err != nil {
 		return err
+	}
+	if s.db != nil {
+		if err := s.persist(s.st, next); err != nil {
+			return err
+		}
 	}
 	s.st = next
 	return nil
@@ -86,6 +94,7 @@ type tag struct {
 // assign a fresh value, so a shallow struct copy is safe to share.
 type card struct {
 	id, boardID, listID  int64
+	position             int // order within the list; see moveCard
 	title                string
 	dueAt                *time.Time
 	dueAllDay            bool
@@ -270,6 +279,65 @@ func placeCard(c *card, l list, now time.Time) {
 	}
 }
 
+// listOrder returns every card in a list (archived ones too, they keep their
+// slot) in position order.
+func (st *state) listOrder(listID int64) []card {
+	var out []card
+	for _, c := range st.cards {
+		if c.listID == listID {
+			out = append(out, c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].position != out[j].position {
+			return out[i].position < out[j].position
+		}
+		return out[i].id < out[j].id
+	})
+	return out
+}
+
+func (st *state) renumberList(listID int64) {
+	for i, c := range st.listOrder(listID) {
+		c.position = i
+		st.cards[c.id] = c
+	}
+}
+
+// moveCard stores c in list l at index pos among the list's unarchived cards
+// (the order clients see), or at the end when pos is nil. Both the old and
+// new list are renumbered, and completedAt follows the list's kind.
+func (st *state) moveCard(c card, l list, pos *int, now time.Time) card {
+	from := c.listID
+	placeCard(&c, l, now)
+	var order []int64
+	var visible []int64
+	for _, o := range st.listOrder(l.id) {
+		if o.id == c.id {
+			continue
+		}
+		order = append(order, o.id)
+		if o.archivedAt == nil {
+			visible = append(visible, o.id)
+		}
+	}
+	at := len(order)
+	if pos != nil && *pos < len(visible) {
+		at = slices.Index(order, visible[max(*pos, 0)])
+	}
+	order = slices.Insert(order, at, c.id)
+	st.cards[c.id] = c
+	for i, id := range order {
+		x := st.cards[id]
+		x.position = i
+		st.cards[id] = x
+	}
+	if from != l.id {
+		st.renumberList(from)
+	}
+	return st.cards[c.id]
+}
+
 // boardListOnBoard checks that listID exists and belongs to boardID.
 func (st *state) listOnBoard(boardID, listID int64, field string) (list, error) {
 	l, ok := st.lists[listID]
@@ -369,7 +437,7 @@ func (st *state) toTag(t tag) domain.Tag {
 
 func toSummary(c card) domain.CardSummary {
 	return domain.CardSummary{
-		ID: c.id, BoardID: c.boardID, ListID: c.listID, Title: c.title, DueAt: c.dueAt,
+		ID: c.id, BoardID: c.boardID, ListID: c.listID, Position: c.position, Title: c.title, DueAt: c.dueAt,
 		DueAllDay: c.dueAllDay, SpecialTagID: c.specialTagID, TagIDs: append([]int64{}, c.tagIDs...),
 		CompletedAt: c.completedAt, ArchivedAt: c.archivedAt, CreatedAt: c.createdAt, UpdatedAt: c.updatedAt,
 	}

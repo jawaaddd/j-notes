@@ -45,11 +45,11 @@ func (s *Store) Seed() error {
 		listID := map[string]int64{} // "Board/List" → id
 		for _, bs := range []boardSpec{
 			{"Fall 2026", "Assignments", "Classes", []tagSpec{
-				{"DiffEq", "orange", true}, {"Robotics", "yellow", true}, {"AI Policy", "violet", true},
+				{"DiffEq", "orange", true}, {"Robotics", "pink", true}, {"AI Policy", "violet", true},
 				{"Exam prep", "blue", false}, {"Waiting on someone", "violet", false}, {"Group work", "cyan", false},
 			}},
 			{"Personal", "Tasks", "Areas", []tagSpec{
-				{"Home", "cyan", true}, {"Errands", "orange", true}, {"Money", "yellow", true}, {"expensive", "blue", false},
+				{"Home", "cyan", true}, {"Errands", "orange", true}, {"Money", "pink", true}, {"expensive", "blue", false},
 			}},
 			{"Projects", "Cards", "Tags", []tagSpec{{"App", "violet", true}, {"Music", "pink", true}}},
 		} {
@@ -139,6 +139,10 @@ func (s *Store) Seed() error {
 			cardIDs[cs.title] = c.id
 		}
 
+		for id := range st.lists {
+			st.renumberList(id) // cards were added in display order; number them that way
+		}
+
 		fall := st.boardIDByName("Fall 2026")
 		hw6 := st.cards[cardIDs["HW 6: Laplace transforms"]]
 		for _, item := range []domain.InboxItem{
@@ -179,10 +183,10 @@ func (st *state) boardIDByName(name string) int64 {
 func lab3Notes() []domain.NoteBlock {
 	return []domain.NoteBlock{
 		{ID: "b1", Type: domain.BlockText, Text: "Grid planner on the 2D occupancy map. Diagonal moves are allowed, so the heuristic has to stay admissible — octile distance, not Manhattan. Ask in office hours whether we can reuse last week's priority queue."},
-		{ID: "b2", Type: domain.BlockSubtask, Text: "Re-read lecture 7 slides on informed search", Done: true},
-		{ID: "b3", Type: domain.BlockSubtask, Text: "Implement the priority queue", Done: true},
-		{ID: "b4", Type: domain.BlockSubtask, Text: "Octile-distance heuristic + diagonal moves"},
-		{ID: "b5", Type: domain.BlockSubtask, Text: "Test cases for fully blocked grids"},
+		{ID: "b2", Type: domain.BlockTodo, Text: "Re-read lecture 7 slides on informed search", Done: true},
+		{ID: "b3", Type: domain.BlockTodo, Text: "Implement the priority queue", Done: true},
+		{ID: "b4", Type: domain.BlockTodo, Text: "Octile-distance heuristic + diagonal moves"},
+		{ID: "b5", Type: domain.BlockTodo, Text: "Test cases for fully blocked grids"},
 		{ID: "b6", Type: domain.BlockLink, Title: "Lab 3 handout (PDF)", URL: "https://autolab.cse.buffalo.edu/courses/cse4630-f26/assessments/lab3/handout.pdf"},
 		{ID: "b7", Type: domain.BlockLink, Title: "Red Blob Games: Introduction to A*", URL: "https://www.redblobgames.com/pathfinding/a-star/introduction.html"},
 	}

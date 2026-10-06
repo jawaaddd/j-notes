@@ -1,6 +1,6 @@
 // Package store defines the persistence interfaces the API handlers depend on.
-// The mock phase uses the in-memory implementation in store/memory; a MySQL
-// implementation will satisfy the same interfaces, so handlers don't change.
+// store/memory implements them, in memory or written through to SQLite; another
+// database would satisfy the same interfaces, so handlers don't change.
 //
 // Every method is atomic: it either applies all of its changes or none, and
 // returns a *domain.Error for anything the caller did wrong.
@@ -26,6 +26,8 @@ type Lists interface {
 	UpdateList(listID int64, in domain.ListPatch) (domain.List, error)
 	ReorderLists(boardID int64, listIDs []int64) ([]domain.List, error)
 	DeleteList(listID int64, in domain.ListDelete) error
+	// ArchiveList archives every unarchived card in the list and returns how many.
+	ArchiveList(listID int64) (int, error)
 }
 
 type Tags interface {

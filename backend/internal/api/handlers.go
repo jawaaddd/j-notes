@@ -283,6 +283,20 @@ func (h *handlers) deleteList(c *gin.Context) {
 	noContent(c)
 }
 
+func (h *handlers) archiveList(c *gin.Context) {
+	id, err := idParam(c, "listId", "list")
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	n, err := h.store.ArchiveList(id)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, gin.H{"archived": n})
+}
+
 // ---- tags ----
 
 func (h *handlers) listTags(c *gin.Context) {
@@ -374,7 +388,7 @@ func (h *handlers) listCards(c *gin.Context) {
 // dueTo take a full timestamp, or a date (UTC); a date dueTo includes that
 // whole day.
 func cardQuery(c *gin.Context) (domain.CardQuery, error) {
-	q := domain.CardQuery{Sort: domain.SortDue}
+	q := domain.CardQuery{Sort: domain.SortPosition}
 	if v := c.Query("listId"); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
@@ -414,10 +428,10 @@ func cardQuery(c *gin.Context) (domain.CardQuery, error) {
 	}
 	if v := c.Query("sort"); v != "" {
 		switch s := domain.CardSort(v); s {
-		case domain.SortDue, domain.SortCreated, domain.SortTitle:
+		case domain.SortPosition, domain.SortDue, domain.SortCreated, domain.SortTitle:
 			q.Sort = s
 		default:
-			return q, domain.ErrValidation("sort", "sort must be due, created, or title")
+			return q, domain.ErrValidation("sort", "sort must be position, due, created, or title")
 		}
 	}
 	return q, nil

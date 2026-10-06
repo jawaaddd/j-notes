@@ -2,6 +2,11 @@
 .env
 .env.*
 
+# SQLite data
+*.db
+*.db-wal
+*.db-shm
+
 # Go build output
 /backend/server
 /backend/bin/

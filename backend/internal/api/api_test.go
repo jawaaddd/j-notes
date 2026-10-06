@@ -259,6 +259,7 @@ func TestDeleteBoard(t *testing.T) {
 	if len(boards) != 1 || boards[0].(map[string]any)["position"] != 0.0 {
 		t.Fatalf("boards after delete: %v", boards)
 	}
+	c.do("DELETE", "/api/boards/1", map[string]any{"cards": "delete"}).wantErr(t, 422, "LAST_BOARD")
 }
 
 // ---- lists ----
@@ -302,7 +303,10 @@ func TestTagRules(t *testing.T) {
 	c := newClient(t, "correct horse")
 	c.do("DELETE", "/api/tags/21", nil).wantErr(t, 422, "SYSTEM_TAG")
 	c.do("PATCH", "/api/tags/21", map[string]any{"isSpecial": true}).wantErr(t, 422, "SYSTEM_TAG")
-	c.do("PATCH", "/api/tags/21", map[string]any{"name": "ASAP", "color": "orange"}).want(t, 200)
+	c.do("PATCH", "/api/tags/21", map[string]any{"color": "orange"}).wantErr(t, 422, "SYSTEM_TAG")
+	c.do("PATCH", "/api/tags/21", map[string]any{"name": "ASAP", "color": "yellow"}).want(t, 200)
+	c.do("POST", "/api/boards/1/tags", map[string]any{"name": "Lab", "color": "yellow"}).wantErr(t, 422, "VALIDATION")
+	c.do("PATCH", "/api/tags/24", map[string]any{"color": "yellow"}).wantErr(t, 422, "VALIDATION")
 	c.do("POST", "/api/boards/1/tags", map[string]any{"name": "Lab", "color": "green"}).wantErr(t, 422, "VALIDATION")
 	c.do("POST", "/api/boards/1/tags", map[string]any{"name": "DiffEq", "color": "blue"}).wantErr(t, 422, "VALIDATION")
 
@@ -403,7 +407,7 @@ func TestNotes(t *testing.T) {
 	}
 	blocks := []map[string]any{
 		{"id": "a", "type": "text", "text": "hello"},
-		{"id": "b", "type": "subtask", "text": "do it", "done": true},
+		{"id": "b", "type": "todo", "text": "do it", "done": true},
 		{"id": "c", "type": "link", "title": "site", "url": "https://example.com"},
 	}
 	r := c.do("PUT", "/api/cards/105/notes", map[string]any{"blocks": blocks}).want(t, 200)
@@ -595,4 +599,62 @@ func equal(a, b []float64) bool {
 		}
 	}
 	return true
+}
+
+func TestCustomOrder(t *testing.T) {
+	c := newClient(t, "correct horse")
+	order := func(listID float64) []float64 {
+		var out []float64
+		for _, x := range c.do("GET", "/api/boards/1/cards?listId="+itoa(listID), nil).want(t, 200).list {
+			out = append(out, x.(map[string]any)["id"].(float64))
+		}
+		return out
+	}
+	// Default sort is position; the seed's To Do order is HW 5, HW 6, Lab 4, Policy memo.
+	if got := order(11); !equal(got, []float64{101, 102, 103, 104}) {
+		t.Fatalf("initial order %v", got)
+	}
+	// Move Policy memo to the top of To Do.
+	c.do("PATCH", "/api/cards/104", map[string]any{"position": 0}).want(t, 200)
+	if got := order(11); !equal(got, []float64{104, 101, 102, 103}) {
+		t.Fatalf("after reorder %v", got)
+	}
+	// Move HW 5 into In Progress, above Lab 3.
+	moved := c.do("PATCH", "/api/cards/101", map[string]any{"listId": 12, "position": 0}).want(t, 200)
+	if moved.num("position") != 0 || !equal(order(12), []float64{101, 105}) || !equal(order(11), []float64{104, 102, 103}) {
+		t.Fatalf("cross-list move: in progress %v, to do %v", order(12), order(11))
+	}
+	// Without a position, a card changing lists lands at the end.
+	c.do("PATCH", "/api/cards/102", map[string]any{"listId": 12}).want(t, 200)
+	if got := order(12); !equal(got, []float64{101, 105, 102}) {
+		t.Fatalf("append %v", got)
+	}
+	// A position past the end also means the end; archived cards don't count.
+	c.do("PATCH", "/api/cards/105", map[string]any{"archived": true}).want(t, 200)
+	c.do("PATCH", "/api/cards/101", map[string]any{"position": 9}).want(t, 200)
+	if got := order(12); !equal(got, []float64{102, 101}) {
+		t.Fatalf("clamped %v", got)
+	}
+	c.do("PATCH", "/api/cards/101", map[string]any{"position": -1}).wantErr(t, 422, "VALIDATION")
+	// New cards go to the end.
+	r := c.do("POST", "/api/boards/1/cards", map[string]any{"title": "Last"}).want(t, 201)
+	if got := order(11); got[len(got)-1] != r.num("id") {
+		t.Fatalf("new card not last: %v", got)
+	}
+}
+
+func TestArchiveList(t *testing.T) {
+	c := newClient(t, "correct horse")
+	if got := c.do("POST", "/api/lists/13/archive", nil).want(t, 200).body["archived"]; got != 1.0 {
+		t.Fatalf("archived = %v, want 1 (Done on Fall 2026)", got)
+	}
+	if got := c.do("POST", "/api/lists/13/archive", nil).want(t, 200).body["archived"]; got != 0.0 {
+		t.Fatalf("second run archived = %v, want 0", got)
+	}
+	for _, x := range c.do("GET", "/api/boards/1/cards", nil).want(t, 200).list {
+		if x.(map[string]any)["listId"] == 13.0 {
+			t.Fatalf("card still unarchived in Done: %v", x)
+		}
+	}
+	c.do("POST", "/api/lists/999/archive", nil).wantErr(t, 404, "NOT_FOUND")
 }

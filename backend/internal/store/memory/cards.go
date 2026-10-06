@@ -38,6 +38,10 @@ func (s *Store) ListCards(boardID int64, q domain.CardQuery) ([]domain.CardSumma
 				return pa < pb
 			}
 			switch q.Sort {
+			case domain.SortPosition:
+				if a.position != b.position {
+					return a.position < b.position
+				}
 			case domain.SortCreated:
 				if !a.createdAt.Equal(b.createdAt) {
 					return a.createdAt.Before(b.createdAt)
@@ -116,9 +120,7 @@ func (st *state) insertCard(in newCard, now time.Time) (card, error) {
 	if in.synced {
 		c.lastSyncedAt = &now
 	}
-	placeCard(&c, l, now)
-	st.cards[c.id] = c
-	return c, nil
+	return st.moveCard(c, l, nil, now), nil // new cards go to the end of the list
 }
 
 func (st *state) manualSourceID() int64 {
@@ -167,16 +169,22 @@ func (s *Store) UpdateCard(cardID int64, in domain.CardPatch) (domain.Card, erro
 				return err
 			}
 		}
-		if in.ListID.Set {
-			if in.ListID.Value == nil {
-				return domain.ErrValidation("listId", "listId can't be null")
+		if in.ListID.Set || in.Position.Set {
+			target := st.lists[c.listID]
+			if in.ListID.Set {
+				if in.ListID.Value == nil {
+					return domain.ErrValidation("listId", "listId can't be null")
+				}
+				if target, err = st.listOnBoard(c.boardID, *in.ListID.Value, "listId"); err != nil {
+					return err
+				}
 			}
-			l, err := st.listOnBoard(c.boardID, *in.ListID.Value, "listId")
-			if err != nil {
-				return err
+			if in.Position.Set && (in.Position.Value == nil || *in.Position.Value < 0) {
+				return domain.ErrValidation("position", "position must be a non-negative number")
 			}
-			if l.id != c.listID {
-				placeCard(&c, l, now)
+			// Without a position, a card moving lists goes to the end of the new one.
+			if in.Position.Set || target.id != c.listID {
+				c = st.moveCard(c, target, in.Position.Value, now)
 			}
 		}
 		if in.DueAt.Set {
@@ -225,7 +233,7 @@ func (s *Store) MarkDone(cardID int64) (domain.Card, error) {
 		}
 		done, _ := st.firstList(c.boardID, domain.KindDone)
 		if c.listID != done.id {
-			placeCard(&c, done, now)
+			c = st.moveCard(c, done, nil, now)
 			c.updatedAt = now
 			st.cards[c.id] = c
 		}
@@ -341,11 +349,10 @@ func (st *state) moveCards(in domain.CardMove, now time.Time) ([]domain.CardSumm
 			target, _ = st.firstList(in.ToBoardID, from.kind)
 		}
 		c.boardID = in.ToBoardID
-		placeCard(&c, target, now)
 		c.specialTagID = special
 		c.tagIDs = slices.Clone(regular)
 		c.updatedAt = now
-		st.cards[c.id] = c
+		c = st.moveCard(c, target, nil, now)
 		out = append(out, toSummary(c))
 	}
 	return out, nil

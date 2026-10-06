@@ -12,6 +12,10 @@ import (
 
 var healths = map[string]bool{"ok": true, "needs_reauth": true, "error": true}
 
+// notSetUp is the health of a source that has never sent a heartbeat or an
+// item. The first one replaces it.
+const notSetUp = "not_set_up"
+
 func (s *Store) Ingest(in domain.IngestBatch) ([]domain.IngestResult, error) {
 	var out []domain.IngestResult
 	err := s.tx(func(st *state, now time.Time) error {
@@ -35,6 +39,10 @@ func (s *Store) Ingest(in domain.IngestBatch) ([]domain.IngestResult, error) {
 				return err
 			}
 			out = append(out, r)
+		}
+		if src.health == notSetUp {
+			src.health, src.lastSyncAt = "ok", &now
+			st.sources[src.id] = src
 		}
 		return nil
 	})

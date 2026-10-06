@@ -1,11 +1,20 @@
-// Command server runs the notes-app API. In the mock phase all data lives in
-// memory, seeded with the Figma sample data, and resets on restart.
+// Command server runs the notes-app API. Data is saved to a SQLite file, or
+// with NOTES_MOCK=1 kept in memory with the Figma sample data and reset on
+// restart.
 //
 // Environment:
 //
-//	NOTES_ADDR      listen address (default 127.0.0.1:8080)
-//	NOTES_PASSWORD  the password; defaults to "dev" in the mock. Set it to an
-//	                empty string to start with no password and try first-run setup.
+//	NOTES_ADDR         listen address (default 127.0.0.1:8080)
+//	NOTES_DB           SQLite database file (default notes.db), created if missing
+//	NOTES_SAMPLE_DATA  1 to fill a new database with the sample data instead of
+//	                   one empty board
+//	NOTES_MOCK         1 to keep everything in memory with the sample data
+//	NOTES_PASSWORD     the password, replacing any set in the app. Unset, the
+//	                   server uses the stored password or runs first-run setup.
+//	                   In the mock it defaults to "dev"; set it to an empty
+//	                   string there to try first-run setup.
+//	NOTES_BACKUPS      folder for daily backups (default: "backups" next to the
+//	                   database), keeping the newest 14; "off" turns them off
 package main
 
 import (
@@ -15,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -22,6 +32,7 @@ import (
 
 	"notes-app/internal/api"
 	"notes-app/internal/auth"
+	"notes-app/internal/backup"
 	"notes-app/internal/store/memory"
 )
 
@@ -34,15 +45,29 @@ func main() {
 
 func run() error {
 	addr := envOr("NOTES_ADDR", "127.0.0.1:8080")
+	mock := os.Getenv("NOTES_MOCK") == "1"
 	password, set := os.LookupEnv("NOTES_PASSWORD")
-	if !set {
-		password = "dev"
-		slog.Warn(`mock mode: NOTES_PASSWORD not set, using password "dev"`)
-	}
 
-	st := memory.New(nil, nil)
-	if err := st.Seed(); err != nil {
-		return err
+	var st *memory.Store
+	var where, backups string
+	if mock {
+		if !set {
+			password = "dev"
+			slog.Warn(`mock mode: NOTES_PASSWORD not set, using password "dev"`)
+		}
+		st = memory.New(nil, nil)
+		if err := st.Seed(); err != nil {
+			return err
+		}
+		where = "mock data, in memory"
+	} else {
+		where = envOr("NOTES_DB", "notes.db")
+		var err error
+		if st, err = memory.Open(where, os.Getenv("NOTES_SAMPLE_DATA") == "1", nil, nil); err != nil {
+			return err
+		}
+		defer st.Close()
+		backups = envOr("NOTES_BACKUPS", filepath.Join(filepath.Dir(where), "backups"))
 	}
 	authSvc, err := auth.NewService(st, auth.Config{EnvPassword: password})
 	if err != nil {
@@ -58,9 +83,12 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if backups != "" && backups != "off" {
+		go backup.Daily(ctx, backups, 14, st.Backup, time.Now)
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("notes-app API listening (mock data, in memory)", "addr", "http://"+addr)
+		slog.Info("notes-app API listening", "addr", "http://"+addr, "data", where)
 		errCh <- srv.ListenAndServe()
 	}()
 

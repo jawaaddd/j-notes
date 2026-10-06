@@ -60,6 +60,7 @@ func New(st store.Store, authSvc *auth.Service) *gin.Engine {
 	a.PUT("/boards/:boardId/lists/order", h.reorderLists)
 	a.PATCH("/lists/:listId", h.updateList)
 	a.DELETE("/lists/:listId", h.deleteList)
+	a.POST("/lists/:listId/archive", h.archiveList)
 
 	a.GET("/boards/:boardId/tags", h.listTags)
 	a.POST("/boards/:boardId/tags", h.createTag)

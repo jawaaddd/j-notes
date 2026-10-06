@@ -88,6 +88,10 @@ func ErrInvalidAction(msg string) *Error {
 	return newErr(http.StatusUnprocessableEntity, "INVALID_ACTION", msg, nil)
 }
 
+func ErrLastBoard() *Error {
+	return newErr(http.StatusUnprocessableEntity, "LAST_BOARD", "can't delete the only board; create another first", nil)
+}
+
 func ErrBoardHasCards(n int) *Error {
 	return newErr(http.StatusConflict, "BOARD_HAS_CARDS",
 		fmt.Sprintf("board has %d cards; choose to delete or move them", n), map[string]any{"cardCount": n})

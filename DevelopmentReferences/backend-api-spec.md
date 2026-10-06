@@ -21,7 +21,7 @@ The backend is a Go + Gin JSON API over MySQL 8, served under `/api`. Each serve
 **Conventions**
 
 - **Auth:** every `/api` route requires `Authorization: Bearer <token>`, where the token is a session token from login or an API token (see Auth). Missing, unknown, revoked, or expired → 401. The open routes are `GET /healthz`, `GET /api/auth/status`, `POST /api/auth/setup`, and `POST /api/auth/login`.
-- **Config:** `NOTES_ADDR` is the listen address (default `127.0.0.1:8080`; set `0.0.0.0:8080` to accept other devices). `NOTES_PASSWORD` optionally sets the password from the environment (see Auth).
+- **Config:** `NOTES_ADDR` is the listen address (default `127.0.0.1:8080`; set `0.0.0.0:8080` to accept other devices). `NOTES_DB` is the SQLite file (default `notes.db`, created if missing); a new one starts with the default sources and one empty board, or the sample data with `NOTES_SAMPLE_DATA=1`. `NOTES_MOCK=1` keeps everything in memory with the sample data instead. `NOTES_PASSWORD` optionally sets the password from the environment (see Auth).
 - **JSON:** request and response bodies use camelCase keys; ids are numbers; absent optional values are `null`, not omitted.
 - **Time:** every timestamp is an ISO 8601 UTC string, e.g. `"2026-10-09T03:59:00Z"`. A card's `dueAllDay: true` means only the date part matters; the client renders all times in the user's local zone.
 - **Partial updates:** PATCH bodies contain only the fields being changed.
@@ -42,6 +42,7 @@ The backend is a Go + Gin JSON API over MySQL 8, served under `/api`. Each serve
 | `VALIDATION` | 422 | Bad or missing field; `details` names the field |
 | `CROSS_BOARD` | 422 | A list or tag id belongs to a different board than the card |
 | `NOT_SPECIAL` | 422 | `specialTagId` points at a tag with `isSpecial: false` |
+| `LAST_BOARD` | 422 | Deleting the only board |
 | `LAST_OF_KIND` | 422 | Removing or re-kinding the board's last open or last done list |
 | `SYSTEM_TAG` | 422 | Deleting the Urgent tag |
 | `INVALID_ACTION` | 422 | An Inbox action that doesn't fit the item's type |
@@ -80,10 +81,10 @@ These are the JSON objects every route returns. Fields marked *(derived)* are co
 **Tag**
 
 ```json
-{ "id": 21, "boardId": 1, "name": "Urgent", "color": "pink", "isSpecial": false, "systemKey": "urgent", "position": 0, "openCardCount": 1 }
+{ "id": 21, "boardId": 1, "name": "Urgent", "color": "yellow", "isSpecial": false, "systemKey": "urgent", "position": 0, "openCardCount": 1 }
 ```
 
-`color` is one of `pink`, `blue`, `violet`, `cyan`, `orange`, `yellow`. `systemKey` is `"urgent"` or `null`.
+`color` is one of `pink`, `blue`, `violet`, `cyan`, `orange`; `yellow` belongs to the Urgent tag alone (422 `VALIDATION` for any other tag). `systemKey` is `"urgent"` or `null`.
 
 **Card summary** (used in board and calendar lists; no notes)
 
@@ -92,6 +93,7 @@ These are the JSON objects every route returns. Fields marked *(derived)* are co
   "id": 101,
   "boardId": 1,
   "listId": 11,
+  "position": 0,
   "title": "Lab 3: A* path planner",
   "dueAt": "2026-10-09T03:59:00Z",
   "dueAllDay": false,
@@ -115,13 +117,13 @@ The client derives due soon, overdue, and done from `dueAt`, the list's `kind`, 
   "lastSyncedAt": "2026-10-06T11:48:00Z",
   "notes": [
     { "id": "b1", "type": "text", "text": "Grid planner on the 2D occupancy map..." },
-    { "id": "b2", "type": "subtask", "text": "Implement the priority queue", "done": true },
+    { "id": "b2", "type": "todo", "text": "Implement the priority queue", "done": true, "title": "Milestones" },
     { "id": "b3", "type": "link", "title": "Lab 3 handout (PDF)", "url": "https://autolab.cse.buffalo.edu/..." }
   ]
 }
 ```
 
-**Note block:** `type` is `text`, `subtask`, or `link`. Block `id`s are client-generated strings, stable across saves. `notes` is `[]` for a card with no notes.
+**Note block:** `type` is `text`, `todo`, or `link`. Block `id`s are client-generated strings, stable across saves. Each unbroken run of todos is one todo list, named by its first todo's optional `title` (omitted when empty; the app shows "Todos"). `notes` is `[]` for a card with no notes.
 
 **Inbox item**
 
@@ -154,6 +156,8 @@ For `type: "change"`, `cardId` is the card being changed and `change` is `{ "fie
 ```json
 { "name": "autolab", "kind": "scraper", "health": "needs_reauth", "statusMessage": "needs re-login", "lastSyncAt": "2026-10-05T22:10:00Z" }
 ```
+
+`health` is `ok`, `needs_reauth`, `error`, or `not_set_up`. A new database starts every source except `manual` as `not_set_up` (the sidebar shows it red); its first ingest or `ok` heartbeat makes it `ok`.
 
 **API token**
 
@@ -204,10 +208,11 @@ Each server has exactly one user and one password; there are no usernames.
 | PATCH | `/api/boards/:boardId` | `{name?, itemNoun?, specialTagLabel?, position?}` | `Board` |
 | DELETE | `/api/boards/:boardId` | `{cards?: "delete" \| "move", toBoardId?, applyTagIds?}` | 204 |
 
-**Creating a board** runs in one transaction: insert the board, its three default lists (To Do and In Progress as `open`, Done as `done`, positions 0–2), and its Urgent tag (`systemKey: "urgent"`, color pink, not special).
+**Creating a board** runs in one transaction: insert the board, its three default lists (To Do and In Progress as `open`, Done as `done`, positions 0–2), and its Urgent tag (`systemKey: "urgent"`, color yellow, not special).
 
 **Deleting a board** follows the board-delete warning in the UI:
 
+0. It's the only board → 422 `LAST_BOARD`, so the app always has a board to show.
 1. Board has no cards → deleted immediately, body ignored, 204.
 2. Board has cards and no `cards` field → 409 `BOARD_HAS_CARDS` with `details.cardCount`. The UI shows the warning from this response.
 3. `cards: "delete"` → board, lists, tags, and cards deleted, 204. The handler deletes the board's cards explicitly before deleting the board: `cards` references `lists` and `tags` without `ON DELETE`, so relying on the board cascade alone can fail depending on the order InnoDB cascades in.
@@ -222,11 +227,14 @@ Each server has exactly one user and one password; there are no usernames.
 | PATCH | `/api/lists/:listId` | `{name?, kind?}` | `List` |
 | PUT | `/api/boards/:boardId/lists/order` | `{listIds: [12, 10, 11]}` | `[List]` with new positions; must contain every list on the board exactly once |
 | DELETE | `/api/lists/:listId` | `{moveToListId?}` | 204 |
+| POST | `/api/lists/:listId/archive` | — | `{archived: 2}`, the number of cards archived |
 
 - List names are unique per board → duplicate name = 422 `VALIDATION`.
 - Changing `kind` from done to open clears `completedAt` on its cards; open to done sets it to now on cards that don't have one.
 - **Deleting a list:** no cards → deleted. Has cards and no `moveToListId` → 409 `LIST_HAS_CARDS`. With `moveToListId` (same board, else 422 `CROSS_BOARD`) → cards move there, then the list is deleted, in one transaction.
 - Deleting or re-kinding the board's last open or last done list → 422 `LAST_OF_KIND`.
+- **Archiving a list** archives every card on it that isn't archived yet, in one transaction. The app offers it on done lists.
+- **Upgrading an older database:** on start the server makes Urgent tags yellow, turns other yellow tags orange, and marks sources that never synced `not_set_up`.
 
 ## Tags
 
@@ -238,7 +246,7 @@ Each server has exactly one user and one password; there are no usernames.
 | DELETE | `/api/tags/:tagId` | — | 204 |
 
 - Tag names are unique per board → duplicate = 422 `VALIDATION`. Colors outside the palette → 422 `VALIDATION`.
-- **Urgent** can be renamed and recolored, but not deleted (422 `SYSTEM_TAG`) or made special. The Board toolbar's Urgent pill finds it by `systemKey`, never by name.
+- **Urgent** can be renamed, but not recolored (it is always `yellow`), deleted, or made special (422 `SYSTEM_TAG`). Clients find it by `systemKey`, never by name (the status bar's urgent count uses it).
 - **Deleting a tag** first clears it from cards: rows in `card_tags` cascade, and the handler sets `special_tag_id = NULL` on cards that use it as their special tag before deleting. The schema's composite foreign key can't do that on its own, because `ON DELETE SET NULL` would also null the card's `board_id`.
 - **Turning `isSpecial` off** on a tag that cards use as their special tag clears their `specialTagId` and adds the tag to their regular tags instead, so no label is lost. Turning it on for a tag that cards carry as a regular tag works in reverse, only for cards with no special tag yet; other cards keep it as a regular tag.
 
@@ -249,7 +257,7 @@ Each server has exactly one user and one password; there are no usernames.
 | GET | `/api/boards/:boardId/cards` | query params below | `[Card summary]` |
 | POST | `/api/boards/:boardId/cards` | `{title, listId?, dueAt?, dueAllDay?, specialTagId?, tagIds?}` | `Card` (201); source `manual`; `listId` defaults to the first open list |
 | GET | `/api/cards/:cardId` | — | `Card` (full, with notes and source) |
-| PATCH | `/api/cards/:cardId` | `{title?, listId?, dueAt?, dueAllDay?, specialTagId?, tagIds?, archived?}` | `Card` |
+| PATCH | `/api/cards/:cardId` | `{title?, listId?, position?, dueAt?, dueAllDay?, specialTagId?, tagIds?, archived?}` | `Card` |
 | POST | `/api/cards/:cardId/done` | — | `Card`, moved to the board's first done list |
 | DELETE | `/api/cards/:cardId` | — | 204 |
 | PUT | `/api/cards/:cardId/notes` | `{blocks: [Note block]}` | `{blocks, updatedAt}` |
@@ -262,7 +270,7 @@ Each server has exactly one user and one password; there are no usernames.
 | `listId` | `11` | Only cards in that list |
 | `dueFrom`, `dueTo` | `2026-09-27`, `2026-11-01` | Only cards due in that range (the Calendar's visible grid) |
 | `archived` | `true` | Include archived cards; default `false` |
-| `sort` | `due` \| `created` \| `title` | Order within each list; default `due`, cards with no due date last |
+| `sort` | `position` \| `due` \| `created` \| `title` | Order within each list; default `position` (the hand-arranged Custom order). With `due`, cards with no due date sort last. |
 
 The Board view fetches every card on the board and dims non-matches on the client, so tag, special tag, and search filters are not query params in the MVP.
 
@@ -271,6 +279,8 @@ The Board view fetches every card on the board and dims non-matches on the clien
 - `tagIds` replaces the card's whole regular-tag set. Every id must be on the card's board (422 `CROSS_BOARD`) and must not be a special tag.
 - `specialTagId` must be a special tag on the same board (422 `NOT_SPECIAL` / `CROSS_BOARD`); `null` clears it.
 - `listId` must be on the same board. Moving into a done list sets `completedAt` to now; moving into an open list clears it.
+- `position` places the card at that index among the list's unarchived cards (0 = top), with or without a `listId` change; the server renumbers the list. Past the end means the end; negative → 422 `VALIDATION`. A `listId` change without `position` puts the card at the end of the new list.
+- **Card positions** order cards within a list for the Custom sort. Archived cards keep their slot. Every way a card enters a list without a chosen spot (create, ingest, Inbox accept, mark done, list delete, board move) puts it at the end.
 - `archived: true` sets `archivedAt`; `false` clears it.
 
 **Notes** are saved whole. The modal debounces edits (about 800 ms) and sends the full ordered block list; the server validates each block's shape and stores the array in `cards.notes`.
@@ -364,21 +374,27 @@ The schema enforces same-board relationships through composite foreign keys; the
 | Rule | Where it applies | Failure |
 | --- | --- | --- |
 | A new board gets To Do, In Progress (open), Done (done) and an Urgent tag | `POST /api/boards` | — |
+| The server keeps at least one board | Board delete | 422 `LAST_BOARD` |
 | Every board keeps at least one open and one done list | List delete, list `kind` change | 422 `LAST_OF_KIND` |
-| New cards land in the board's first open list | Card create, ingest, Inbox accept | — |
+| New cards land at the end of the board's first open list | Card create, ingest, Inbox accept | — |
+| A card's `position` is its index in its list; lists are renumbered on every move | Card PATCH, mark done, list delete, card move | — |
 | `completedAt` is set on entering a done list, cleared on leaving | Any `listId` change, list `kind` change | — |
 | `specialTagId` must point at a special tag | Card create/PATCH, Inbox accept | 422 `NOT_SPECIAL` |
 | `tagIds` must not include special tags | Card create/PATCH | 422 `VALIDATION` |
 | A tag's special-tag uses are cleared before the tag is deleted | `DELETE /api/tags/:tagId` | — |
-| Urgent can't be deleted or made special | Tag delete/PATCH | 422 `SYSTEM_TAG` |
+| Urgent can't be deleted, recolored, or made special | Tag delete/PATCH | 422 `SYSTEM_TAG` |
+| No other tag can be yellow | Tag POST/PATCH | 422 `VALIDATION` |
+| Archiving a list archives its unarchived cards | `POST /api/lists/:listId/archive` | — |
 | Boards and lists with cards need an explicit move-or-delete choice | Board delete, list delete | 409 `BOARD_HAS_CARDS` / `LIST_HAS_CARDS` |
 | Multi-row changes run in one transaction | Board create/delete, list delete, card move, ingest batch | Rolled back, 500 |
 | Failed password attempts slow down | Setup, login, password change | 429 `RATE_LIMITED` |
 | The database session runs in UTC (`time_zone='+00:00'` in the DSN), so `DATETIME` defaults match the API's UTC timestamps | MySQL connection | — |
 
-## Mock phase
+## Storage and sample data
 
-The first build serves every route above from an in-memory store seeded with the Figma sample data, so the UI renders exactly like the frames on first load. Mutations change the in-memory store, so dragging cards and resolving Inbox items work until the server restarts.
+The server keeps the whole data set in memory and writes every change through to a SQLite file (`NOTES_DB`) in one transaction before the request returns; if the write fails, the change is dropped and the request fails with 500. On startup the file is loaded in full. SQLite needs no separate server, which keeps self-hosting to a single binary and a single file. The SQLite tables mirror `schema.sql`, with times as UTC RFC 3339 text and no foreign keys, since the rules are enforced in the store.
+
+`NOTES_MOCK=1` skips the file and starts from the sample data below, so the UI renders exactly like the Figma frames; changes last until the server restarts. `NOTES_SAMPLE_DATA=1` puts the same data into a new database file.
 
 **Seed data**
 
@@ -386,24 +402,24 @@ The first build serves every route above from an in-memory store seeded with the
 | --- | --- |
 | Boards | Fall 2026 (Assignments, Classes), Personal (Tasks, Areas), Projects (Cards, Tags) |
 | Lists | To Do, In Progress, Done on every board |
-| Special tags, Fall 2026 | DiffEq (orange), Robotics (yellow), AI Policy (violet) |
-| Regular tags, Fall 2026 | Urgent (pink, system), Exam prep (blue), Waiting on someone (violet), Group work (cyan) |
+| Special tags, Fall 2026 | DiffEq (orange), Robotics (pink), AI Policy (violet) |
+| Regular tags, Fall 2026 | Urgent (yellow, system), Exam prep (blue), Waiting on someone (violet), Group work (cyan) |
 | Cards, Fall 2026 | HW 5: Second-order linear ODEs (overdue); HW 6: Laplace transforms (due tomorrow, Exam prep); Lab 4: Particle filter localization (Group work); Policy memo (2 pages); Lab 3: A* path planner (In Progress, Urgent + Group work, with the notes from the Card Modal frame); Reading response: week 5 (Done) |
-| Special tags, Personal | Home (cyan), Errands (orange), Money (yellow) |
-| Regular tags, Personal | Urgent (pink, system), expensive (blue) |
+| Special tags, Personal | Home (cyan), Errands (orange), Money (pink) |
+| Regular tags, Personal | Urgent (yellow, system), expensive (blue) |
 | Cards, Personal | Hang up poster; Return library books; Pay phone bill; Buy groceries for the week; Set up DJ cable + speakers (In Progress); Order poster + DJ cable (Done) |
 | Projects | Special tags App (violet), Music (pink); Urgent; three open cards so the board menu reads "3 open" |
 | Inbox items | The four from the Inbox frame: two voice, one change (HW 6 due date), one duplicate |
 | Sources | webwork ok, autolab needs_reauth, voice ok, syllabus ok, manual ok |
-| Password | `NOTES_PASSWORD`, defaulting to `dev` in the mock. Setting `NOTES_PASSWORD=` (empty) starts with no password, to test the first-run setup flow. |
+| Password | `NOTES_PASSWORD`, defaulting to `dev` in the mock (`NOTES_MOCK=1`). Setting `NOTES_PASSWORD=` (empty) starts with no password, to test the first-run setup flow. |
 
 Due dates in the seed are relative to the server's start date (e.g. HW 5 = yesterday, HW 6 = tomorrow), so overdue and due-soon states always look right.
 
-**Switching to MySQL:** each resource gets a repository interface with an in-memory and a MySQL implementation. Routes move over one at a time, boards and lists first, by switching which implementation the handler gets. The handlers, request validation, and response shapes don't change between phases.
+**MySQL later:** `schema.sql` is the MySQL form of the same data. A MySQL store would implement the same `store.Store` interfaces; the handlers, request validation, and response shapes wouldn't change.
 
 ## Open decisions
 
-None of these block the mock phase; each needs an answer before its route goes to MySQL.
+None of these block the current build.
 
 - [ ] Inbox and Sources are global in this spec (one Inbox, items carry a `boardId`). Should the Inbox be filtered per board instead?
 - [ ] Which classifier runs voice parsing (e.g. Jev for routing plus a small LLM call for title and date extraction), and what confidence threshold sends an entry to the Inbox?
